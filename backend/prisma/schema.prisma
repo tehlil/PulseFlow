@@ -1,0 +1,294 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// -------------------------------------------------------------
+// 1. TENANCY & STAFF MANAGEMENT
+// -------------------------------------------------------------
+
+model Hospital {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String
+  slug      String    @unique
+  status    String    @default("ACTIVE") // ACTIVE, SUSPENDED
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  // Relations
+  departments Department[]
+  users       User[]
+  patients    Patient[]
+  auditLogs   AuditLog[]
+  documents   Document[]
+
+  @@index([createdAt])
+}
+
+model Department {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String
+  description String?
+  hospitalId  String    @db.Uuid
+  hospital    Hospital  @relation(fields: [hospitalId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  // Relations
+  users User[]
+
+  @@index([hospitalId])
+  @@index([createdAt])
+}
+
+model User {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email        String    @unique
+  passwordHash String
+  firstName    String
+  lastName     String
+  status       String    @default("ACTIVE") // ACTIVE, SUSPENDED
+  roleId       String    @db.Uuid
+  role         Role      @relation(fields: [roleId], references: [id])
+  hospitalId   String?   @db.Uuid
+  hospital     Hospital? @relation(fields: [hospitalId], references: [id], onDelete: Cascade)
+  departmentId String?   @db.Uuid
+  department   Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime?
+
+  // Relations
+  refreshTokens RefreshToken[]
+  notifications Notification[]
+  auditLogs     AuditLog[]
+  uploadedDocs  Document[]     @relation("UploadedBy")
+  recordedAssessments Assessment[] @relation("RecordedBy")
+  doctorVisits  Visit[]        @relation("DoctorVisits")
+
+  @@index([hospitalId])
+  @@index([createdAt])
+}
+
+model RefreshToken {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  token     String   @unique
+  userId    String   @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  revoked   Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
+
+// -------------------------------------------------------------
+// 2. ROLE-BASED ACCESS CONTROL (RBAC)
+// -------------------------------------------------------------
+
+model Role {
+  id          String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String       @unique // e.g. "SUPER_ADMIN", "HOSPITAL_ADMIN", "DOCTOR", "NURSE", "DATA_ANALYST"
+  description String?
+  permissions Permission[]
+  users       User[]
+}
+
+model Permission {
+  id          String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String  @unique // e.g. "users:write", "patients:read", "assessments:write"
+  description String?
+  roles       Role[]
+}
+
+// -------------------------------------------------------------
+// 3. CLINICAL DATA MANAGEMENT
+// -------------------------------------------------------------
+
+model Patient {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  hospitalId  String    @db.Uuid
+  hospital    Hospital  @relation(fields: [hospitalId], references: [id], onDelete: Cascade)
+  mrn         String    // Medical Record Number (unique per hospital)
+  firstName   String
+  lastName    String
+  dateOfBirth DateTime
+  gender      String
+  phone       String?
+  email       String?
+  address     String?
+  status      String    @default("ACTIVE") // ACTIVE, INACTIVE
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  // Relations
+  medicalHistory MedicalHistory[]
+  visits         Visit[]
+  assessments    Assessment[]
+  predictions    Prediction[]
+  documents      Document[]
+
+  @@unique([hospitalId, mrn])
+  @@index([hospitalId])
+  @@index([createdAt])
+}
+
+model MedicalHistory {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  patientId  String    @db.Uuid
+  patient    Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  type       String    // ALLERGY, CONDITION, MEDICATION, DIAGNOSIS, LAB_RESULT
+  value      String
+  notes      String?
+  recordedAt DateTime  @default(now())
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  deletedAt  DateTime?
+
+  @@index([patientId])
+  @@index([createdAt])
+}
+
+model Visit {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  patientId  String    @db.Uuid
+  patient    Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  doctorId   String    @db.Uuid
+  doctor     User      @relation("DoctorVisits", fields: [doctorId], references: [id])
+  visitDate  DateTime
+  reason     String
+  notes      String?
+  status     String    @default("COMPLETED") // SCHEDULED, COMPLETED, CANCELLED
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  deletedAt  DateTime?
+
+  @@index([patientId])
+  @@index([createdAt])
+}
+
+model Assessment {
+  id                     String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  patientId              String    @db.Uuid
+  patient                Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  recorderId             String    @db.Uuid
+  recorder               User      @relation("RecordedBy", fields: [recorderId], references: [id])
+  date                   DateTime  @default(now())
+  heartRate              Int?
+  bloodPressureSystolic  Int?
+  bloodPressureDiastolic Int?
+  bloodSugar             Int?
+  oxygenSaturation       Int?
+  temperature            Float?
+  weight                 Float?
+  height                 Float?
+  bmi                    Float?
+  status                 String    @default("DRAFT") // DRAFT, COMPLETED, REVIEWED, ARCHIVED
+  symptoms               Json?     // Array of symptoms with severity
+  labValues              Json?     // Lab biomarkers (e.g. HbA1c, Cholesterol)
+  notes                  String?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+  deletedAt              DateTime?
+
+  // Relations
+  predictions Prediction[]
+
+  @@index([patientId])
+  @@index([createdAt])
+}
+
+// -------------------------------------------------------------
+// 4. PREDICTIONS & EXPLAINABLE AI
+// -------------------------------------------------------------
+
+model Prediction {
+  id                  String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  patientId           String      @db.Uuid
+  patient             Patient     @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  assessmentId        String?     @db.Uuid
+  assessment          Assessment? @relation(fields: [assessmentId], references: [id], onDelete: SetNull)
+  modelName           String      // e.g. "HypertensionRiskModel_v1.0"
+  riskScore           Float       // 0 to 100 percentage
+  riskCategory        String      // LOW, MODERATE, HIGH, CRITICAL
+  confidenceScore     Float       // 0.0 to 1.0 confidence
+  predictionType      String      // DIABETES, CARDIOVASCULAR, HYPERTENSION, READMISSION
+  contributingFactors Json        // Contribution weights: [{ factor: "Obesity", weight: 12 }]
+  recommendedActions  Json        // Array of string recommendations
+  createdById         String?     @db.Uuid
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+  deletedAt           DateTime?
+
+  @@index([patientId])
+  @@index([riskCategory])
+  @@index([createdAt])
+}
+
+// -------------------------------------------------------------
+// 5. INFRASTRUCTURE: DOCUMENTS, NOTIFICATIONS & AUDITS
+// -------------------------------------------------------------
+
+model Document {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  patientId    String    @db.Uuid
+  patient      Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  hospitalId   String    @db.Uuid
+  hospital     Hospital  @relation(fields: [hospitalId], references: [id], onDelete: Cascade)
+  name         String
+  type         String    // LAB_REPORT, PRESCRIPTION, DIAGNOSTIC_REPORT, ATTACHMENT, DISCHARGE_SUMMARY
+  storageKey   String    // Local file path or S3 key
+  fileSize     Int       // Size in bytes
+  fileType     String    // MIME type (e.g. application/pdf)
+  uploadedById String    @db.Uuid
+  uploadedBy   User      @relation("UploadedBy", fields: [uploadedById], references: [id])
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime?
+
+  @@index([patientId])
+  @@index([hospitalId])
+  @@index([createdAt])
+}
+
+model Notification {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String   @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  message   String
+  type      String   // CRITICAL_RISK, FOLLOW_UP, NEW_ASSESSMENT
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model AuditLog {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId     String?   @db.Uuid
+  user       User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action     String    // e.g. "USER_LOGIN", "PATIENT_UPDATE", "PREDICTION_GENERATE"
+  resource   String    // e.g. "PATIENT", "ASSESSMENT", "AUTH"
+  resourceId String?
+  metadata   Json?     // Detailed delta changes or payload info
+  ipAddress  String?
+  userAgent  String?
+  hospitalId String?   @db.Uuid
+  hospital   Hospital? @relation(fields: [hospitalId], references: [id], onDelete: SetNull)
+  createdAt  DateTime  @default(now())
+
+  @@index([hospitalId])
+  @@index([userId])
+  @@index([createdAt])
+}
